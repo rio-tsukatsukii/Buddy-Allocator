@@ -57,7 +57,7 @@ $(STATIC_LIB): $(LIB_OBJS) $(ASM_OBJS) | $(BUILD_DIR)
 
 $(SHARED_LIB): $(LIB_OBJS) $(ASM_OBJS) | $(BUILD_DIR)
 	@echo "[LD]	$@"
-	@$(CC) -shared -Wl,-soname,libbuddy_alloc.so.1 -o $@ $^
+	@$(CC) -shared -o $@ $^
 
 $(BUILD_DIR):
 	@echo "Creating $(BUILD_DIR)"

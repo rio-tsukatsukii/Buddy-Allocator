@@ -11,10 +11,11 @@ Manages memory using the binary buddy allocation algorithm.
 Targets:
 - `shared_lib` (default)
 - `static_lib`
+- `test`
 - `debug`
 - `verbose_debug`
 
-Debug targets also build the test program.
+Debug targets also build the test target.
 
 Example:
 ```bash

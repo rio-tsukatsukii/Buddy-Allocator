@@ -10,12 +10,12 @@ TEST_OBJ := $(BUILD_DIR)/main.o
 LIB_OBJS := $(patsubst $(SRCS_DIR)/%.c,$(BUILD_DIR)/%.o,$(LIB_SRCS))
 ASM_OBJS := $(patsubst $(SRCS_DIR)/%.S,$(BUILD_DIR)/%.o,$(ASM_SRCS))
 
-STATIC_LIB := $(BUILD_DIR)/libbuddy_alloc.a
-SHARED_LIB := $(BUILD_DIR)/libbuddy_alloc.so
+LIB := libbuddy_alloc
 
 CC := gcc
 AS := gcc
 AR := ar
+LD := ld
 
 CFLAGS_BASE := -Wall -Wextra -Werror -std=c99 -march=native -fPIC -Iinclude
 CFLAGS_OPT := -O2
@@ -24,8 +24,10 @@ CFLAGS := $(CFLAGS_BASE) $(CFLAGS_OPT)
 
 NOLIBC_FLAGS := -nostdlib -ffreestanding
 
-shared_lib: $(SHARED_LIB)
-static_lib: $(STATIC_LIB)
+LDFLAGS := -Wl,-rpath,$(BUILD_DIR)
+
+shared_lib: $(BUILD_DIR)/$(LIB).so
+static_lib: $(BUILD_DIR)/$(LIB).a
 
 test: $(BUILD_DIR)/main
 
@@ -35,9 +37,9 @@ debug: clean test
 verbose_debug: CFLAGS := $(CFLAGS_BASE) $(CFLAGS_DEBUG) -DVERBOSE_DEBUG
 verbose_debug: clean test
 
-$(BUILD_DIR)/main: $(TEST_OBJ) $(SHARED_LIB) | $(BUILD_DIR)
-	@echo "[LD]	$@"
-	@$(CC) $(TEST_OBJ) $(SHARED_LIB) -o $@
+$(BUILD_DIR)/main: $(TEST_OBJ) $(BUILD_DIR)/$(LIB).so | $(BUILD_DIR)
+	@echo "[CC]	$@"
+	@$(CC) $(TEST_OBJ) -L$(BUILD_DIR) -l$(LIB:lib%=%) $(LDFLAGS) -o $@
 
 $(TEST_OBJ): $(TEST_SRC) | $(BUILD_DIR)
 	@echo "[CC]	$@"
@@ -51,13 +53,13 @@ $(BUILD_DIR)/%.o: $(SRCS_DIR)/%.S | $(BUILD_DIR)
 	@echo "[AS]	$@"
 	@$(AS) -c -o $@ $<
 
-$(STATIC_LIB): $(LIB_OBJS) $(ASM_OBJS) | $(BUILD_DIR)
+$(BUILD_DIR)/$(LIB).a: $(LIB_OBJS) $(ASM_OBJS) | $(BUILD_DIR)
 	@echo "[AR]	$@"
 	@$(AR) rcs $@ $^
 
-$(SHARED_LIB): $(LIB_OBJS) $(ASM_OBJS) | $(BUILD_DIR)
+$(BUILD_DIR)/$(LIB).so: $(LIB_OBJS) $(ASM_OBJS) | $(BUILD_DIR)
 	@echo "[LD]	$@"
-	@$(CC) -shared -o $@ $^
+	@$(LD) -shared -o $@ $^
 
 $(BUILD_DIR):
 	@echo "Creating $(BUILD_DIR)"

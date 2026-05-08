@@ -5,7 +5,6 @@
 #include <sys/mman.h>
 
 #include "buddy_alloc.h"
-#include "syscalls.h"
 
 #define PAGE_SIZE		0x1000
 
@@ -112,6 +111,11 @@ static inline bool test_bit(uint64_t *map, uint64_t i)
 {
 	return (map[i >> 6] >> (i & 63)) & 1ULL;
 }
+
+extern long sys_mmap(uint64_t addr, uint64_t len, uint64_t prot, uint64_t flags,
+		uint64_t fd, uint64_t off);
+
+extern long sys_munmap(uint64_t addr, uint64_t len);
 
 void *blk_mmap(void)
 {

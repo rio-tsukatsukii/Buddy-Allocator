@@ -1,4 +1,5 @@
 .global sys_mmap
+.hidden sys_mmap
 
 # C function call:
 #	args -> rdi, rsi, rdx, rcx, r8, r9

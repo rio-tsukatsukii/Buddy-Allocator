@@ -31,6 +31,10 @@ void timespec_add(struct timespec *a, const struct timespec *b) {
 int main(void) {
 	void *blk = blk_mmap();
 
+	if (!blk) {
+		printf("blk_mmap failed\n");
+	}
+
 	struct alloc_info_t alloc_info[NUM_ALLOCATIONS] = {0};
 	struct timespec alloc_start, alloc_end;
 	struct timespec alloc_start_total, alloc_end_total;

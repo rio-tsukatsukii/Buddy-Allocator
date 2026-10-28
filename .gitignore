@@ -1,3 +1,4 @@
 build/
 
 scripts/btree.py
+.gdb_history

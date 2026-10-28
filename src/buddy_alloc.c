@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <inttypes.h>
 #include <sys/mman.h>
 
 #include "buddy_alloc.h"
@@ -143,9 +144,92 @@ void blk_munmap(struct buddy_block_t *blk)
 
 #define PDEBUG(fmt, args...) fprintf(stderr, fmt, ##args)
 
+#define ALLOC_REQ(ord) \
+	fprintf(stderr, "[buddy] alloc: requested block of" \
+			" order=%" PRIu64 "\n", (ord))
+
+#define ALLOC_FAIL(ord) \
+	fprintf(stderr, "[buddy] alloc: failed to satisfy request (order" \
+			"=%" PRIu64 ")\n", (ord))
+
+#define CHUNK_ALLOC(chunk) \
+	fprintf(stderr, "[buddy] alloc: allocated block at=%p\n", (chunk))
+
+#define CHUNK_FREE(ord, chunk) \
+	fprintf(stderr, "[buddy] free: returned block at=%p to order=%" \
+			PRIu64 "\n", (chunk), (ord))
+
+#define SPLIT_CHUNK(ord, parent, buddy) \
+	fprintf(stderr, "[buddy] alloc: split order=%" PRIu64 " block at=%p;" \
+			" buddy block at=%p\n", (ord), (parent), (buddy))
+
+#define SPLITMAP_SET(index) \
+	fprintf(stderr, "[buddy] split bitmap: set bit at index=%" PRIu64 \
+			"\n", (index))
+
+#define SPLITMAP_CLR(index) \
+	fprintf(stderr, "[buddy] split bitmap: cleared bit at index=%" PRIu64 \
+			"\n", (index))
+
+#define FREEMAP_SET(index) \
+	fprintf(stderr, "[buddy] free bitmap: set bit at index=%" PRIu64 \
+			"\n", (index))
+
+#define FREEMAP_CLR(index) \
+	fprintf(stderr, "[buddy] free bitmap: cleared bit at index=%" PRIu64 \
+			"\n", (index))
+
+#define CHUNK_MERGE(ord, child, buddy) \
+	fprintf(stderr, "[buddy] merge: combined blocks %p and %p into" \
+			" order=%" PRIu64 " block\n", (child), (buddy), (ord))
+
+#define FREE_REQ(ord, chunk) \
+	fprintf(stderr, "[buddy] free: requested release of order=%" PRIu64 \
+			" block at=%p\n", (ord), (chunk))
+
+#define FREELIST_POP(ord, chunk) \
+	fprintf(stderr, "[buddy] freelist: poped chunk=%p of order=%" PRIu64 \
+			"\n", (chunk), (ord))
+
+#define FREELIST_PUSH(ord, chunk) \
+	fprintf(stderr, "[buddy] freelist: pushed chunk=%p of order=%" PRIu64 \
+			"\n", (chunk), (ord))
+
+#define FREELIST_REM(ord, chunk) \
+	fprintf(stderr, "[buddy] freelist: removed chunk=%p of order=%" \
+			PRIu64 "\n", (chunk), (ord))
+
 #else
 
 #define PDEBUG(fmt, args...)
+
+#define ALLOC_REQ(ord)
+
+#define ALLOC_FAIL(ord)
+
+#define CHUNK_ALLOC(chunk)
+
+#define CHUNK_FREE(ord, chunk)
+
+#define SPLIT_CHUNK(ord, parent, buddy)
+
+#define SPLITMAP_SET(index)
+
+#define SPLITMAP_CLR(index)
+
+#define FREEMAP_SET(index)
+
+#define FREEMAP_CLR(index)
+
+#define CHUNK_MERGE(ord, child, buddy)
+
+#define FREE_REQ(ord, chunk)
+
+#define FREELIST_POP(ord, chunk)
+
+#define FREELIST_PUSH(ord, chunk)
+
+#define FREELIST_REM(ord, chunk)
 
 #endif /* VERBOSE_DEBUG */
 
@@ -189,7 +273,8 @@ static inline void flush_log()
 	idx = 0;
 }
 
-static inline void log_event(struct log_info_t e) {
+static inline void log_event(struct log_info_t e)
+{
 	events[idx++] = e;
 	if (idx == LOG_BUF_SIZE) {
 		flush_log();
@@ -232,29 +317,28 @@ static uint64_t map_base[MAX_ORDER] = {
 void *buddy_alloc(struct buddy_block_t *blk, uint64_t order)
 {
 	LOG_EVENT(LOG_ALLOC_REQ, order, 0, 0, 0, 0);
-
-	PDEBUG("-----------Order requested: %02lu----------\n", order);
+	ALLOC_REQ(order);
 
 	if (blk->free_lists[order].head) {
-		PDEBUG("Already exists in free list:");
 
 		/* Get free chunk */
 		struct buddy_chunk_t *chunk = free_list_pop(&blk->free_lists[order]);
 
-		PDEBUG(" %p\n", chunk);
+		FREELIST_POP(order, chunk);
+		CHUNK_ALLOC(chunk);
 
-		/* Calculate free bitmap index */
 		uint64_t offset = (uint64_t) chunk - (uint64_t) blk->block_base;
 
 		LOG_EVENT(LOG_ALLOC_OK, order, order, offset, order, 0);
 
+		/* Calculate free bitmap index */
 		offset = map_base[order] + (offset >> (order + 12));
 
-		PDEBUG("Set free map bit at: %ld\n", offset);
-		PDEBUG("----------------------------------------\n");
+		FREEMAP_SET(offset);
 
 		/* Mark chunk as allocated and return */
 		set_bit(blk->free_bitmap, offset);
+
 		return chunk;
 	}
 
@@ -263,17 +347,15 @@ void *buddy_alloc(struct buddy_block_t *blk, uint64_t order)
 		struct buddy_chunk_t *chunk = blk->free_lists[i].head;
 
 		if (chunk) {
-			PDEBUG("Chunk found: %p, at order: %ld\n", chunk, i);
-
 			chunk = free_list_pop(&blk->free_lists[i]);
+
+			FREELIST_POP(i, chunk);
 
 			uint64_t base = (uint64_t) blk->block_base;
 			uint64_t chunk_offset = (uint64_t) chunk - base;
 			uint64_t node = 0;
 			uint64_t curr_order = i;
 			uint64_t size = 4096ULL << curr_order;
-
-			PDEBUG("Splitting....\n");
 
 			while (curr_order > order) {
 				curr_order--;
@@ -283,18 +365,19 @@ void *buddy_alloc(struct buddy_block_t *blk, uint64_t order)
 				node = map_base[curr_order] + (chunk_offset >> (curr_order + 12));
 
 				LOG_EVENT(LOG_SPLIT, order, curr_order + 1, chunk_offset, chunk_offset, buddy_offset);
-
-				PDEBUG("	found order: %ld buddy: %p\n", curr_order, (base + buddy_offset));
-				PDEBUG("	Set split map bit at: %ld\n", (node - 1) >> 1);
+				SPLIT_CHUNK(curr_order + 1, chunk, base + buddy_offset);
+				FREELIST_PUSH(curr_order, base + buddy_offset);
 
 				free_list_push(&blk->free_lists[curr_order], (struct buddy_chunk_t *) (base + buddy_offset));
+
+				SPLITMAP_SET((node - 1) >> 1);
+
 				set_bit(blk->split_bitmap, (node - 1) >> 1);
 			}
 
-			PDEBUG("Set free map bit at: %ld\n", node);
-			PDEBUG("----------------------------------------\n");
-
 			LOG_EVENT(LOG_ALLOC_OK, order, i, chunk_offset, curr_order, 0);
+			FREEMAP_SET(node);
+			CHUNK_ALLOC(chunk);
 
 			set_bit(blk->free_bitmap, node);
 
@@ -303,28 +386,13 @@ void *buddy_alloc(struct buddy_block_t *blk, uint64_t order)
 	}
 
 	LOG_EVENT(LOG_ALLOC_FAIL, order, 0, 0, 0, 0);
-
-	PDEBUG("No suitable block found\n");
-#ifdef VERBOSE_DEBUG
-	for (int i = 0; i < MAX_ORDER; i++) {
-		PDEBUG("Free list %d: %p", i, blk->free_lists[i].head);
-		if (blk->free_lists[i].head) {
-			for (struct buddy_chunk_t *chunk = blk->free_lists[i].head->next; chunk != NULL; chunk = chunk->next) {
-				PDEBUG("->%p", chunk);
-			}
-		}
-		PDEBUG("\n");
-	}
-#endif /* VERBOSE_DEBUG */
-	PDEBUG("----------------------------------------\n");
+	ALLOC_FAIL(order);
 
 	return NULL;
 }
 
 void buddy_free(struct buddy_block_t *blk, void *addr, uint64_t order)
 {
-	PDEBUG("----Free request for: %p----\n", addr);
-
 	uint64_t base = (uint64_t) blk->block_base;
 	uint64_t chunk_offset = (uint64_t) addr - base;
 	uint64_t buddy_offset = chunk_offset ^ (4096 << order);
@@ -332,32 +400,16 @@ void buddy_free(struct buddy_block_t *blk, void *addr, uint64_t order)
 	uint64_t buddy_node = map_base[order] + (buddy_offset >> (order + 12));
 
 	LOG_EVENT(LOG_FREE, order, 0, chunk_offset, 0, 0);
-
-	PDEBUG("Cleared free map bit at: %ld\n", chunk_node);
+	FREE_REQ(order, addr);
+	FREEMAP_CLR(chunk_node);
 
 	clear_bit(blk->free_bitmap, chunk_node);
-
-	PDEBUG("Address order: %ld Block base: %p\n", order, blk->block_base);
-	PDEBUG("Merging...\n");
-	PDEBUG("Free list before merging\n");
-#ifdef VERBOSE_DEBUG
-	for (int i = 0; i < MAX_ORDER; i++) {
-		PDEBUG("Free list %d: %p", i, blk->free_lists[i].head);
-		if (blk->free_lists[i].head) {
-			for (struct buddy_chunk_t *chunk = blk->free_lists[i].head->next; chunk != NULL; chunk = chunk->next) {
-				PDEBUG("->%p", chunk);
-			}
-		}
-		PDEBUG("\n");
-	}
-#endif /* VERBOSE_DEBUG */
 
 	/* If order is 0 and buddy is free */
 	if (!order && !test_bit(blk->free_bitmap, buddy_node)) {
 		LOG_EVENT(LOG_MERGE, order, (order + 1), chunk_offset, buddy_offset, (chunk_offset < buddy_offset) ? chunk_offset : buddy_offset);
-
-		PDEBUG("	Merging %p and %p\n", addr, base + buddy_offset);
-		PDEBUG("	Removing from free list: %p\n", base + buddy_offset);
+		CHUNK_MERGE(order + 1, base + chunk_offset, base + buddy_offset);
+		FREELIST_REM(order, base + buddy_offset);
 
 		/* Remove buddy from free list */
 		free_list_remove(&blk->free_lists[order], (struct buddy_chunk_t *) (base + buddy_offset));
@@ -371,7 +423,7 @@ void buddy_free(struct buddy_block_t *blk, void *addr, uint64_t order)
 		buddy_offset = chunk_offset ^ (4096 << order);
 		buddy_node = map_base[order] + (buddy_offset >> (order + 12));
 
-		PDEBUG("	Cleared split map bit at: %ld\n", chunk_node);
+		SPLITMAP_CLR(chunk_node);
 
 		/* Clear split bit for merged chunk */
 		clear_bit(blk->split_bitmap, chunk_node);
@@ -379,28 +431,12 @@ void buddy_free(struct buddy_block_t *blk, void *addr, uint64_t order)
 
 	while (order < 18) {
 		if (test_bit(blk->free_bitmap, buddy_node) || test_bit(blk->split_bitmap, buddy_node)) {
-			PDEBUG("	Did not merge because\n");
-			PDEBUG("	buddy free: %d buddy split: %d\n",
-					test_bit(blk->free_bitmap, buddy_node),
-					test_bit(blk->split_bitmap, buddy_node));
-			PDEBUG("	addr: %p buddy: %p and free list for order %ld\n", addr, base + buddy_offset, order);
-			PDEBUG("	offset: %ld\n", chunk_offset);
-#ifdef VERBOSE_DEBUG
-			PDEBUG("	%p", blk->free_lists[order].head);
-			if (blk->free_lists[order].head) {
-				for (struct buddy_chunk_t *chunk = blk->free_lists[order].head->next; chunk != NULL; chunk = chunk->next) {
-					PDEBUG("->%p", chunk);
-				}
-			}
-			PDEBUG("\n");
-#endif /* VERBOSE_DEBUG */
 			break;
 		}
 
 		LOG_EVENT(LOG_MERGE, order, (order + 1), chunk_offset, buddy_offset, (chunk_offset < buddy_offset) ? chunk_offset : buddy_offset);
-
-		PDEBUG("	Merging %p and %p\n", addr, base + buddy_offset);
-		PDEBUG("	Removing from free list: %p\n", base + buddy_offset);
+		CHUNK_MERGE(order + 1, base + chunk_offset, base + buddy_offset);
+		FREELIST_REM(order, base + buddy_offset);
 
 		free_list_remove(&blk->free_lists[order], (struct buddy_chunk_t *) (base + buddy_offset));
 
@@ -411,26 +447,13 @@ void buddy_free(struct buddy_block_t *blk, void *addr, uint64_t order)
 		buddy_offset = chunk_offset ^ (4096 << order);
 		buddy_node = map_base[order] + (buddy_offset >> (order + 12));
 
-		PDEBUG("	Cleared split map bit at: %ld\n", chunk_node);
+		SPLITMAP_CLR(chunk_node);
 
 		clear_bit(blk->split_bitmap, chunk_node);
 	}
 
-	PDEBUG("Pushing %p into free list at order: %ld\n", addr, order);
+	CHUNK_FREE(order, base + chunk_offset);
+	FREELIST_PUSH(order, base + chunk_offset);
 
 	free_list_push(&blk->free_lists[order], (struct buddy_chunk_t *) (base + chunk_offset));
-
-	PDEBUG("Free list after merging\n");
-#ifdef VERBOSE_DEBUG
-	for (int i = 0; i < MAX_ORDER; i++) {
-		PDEBUG("Free list %d: %p", i, blk->free_lists[i].head);
-		if (blk->free_lists[i].head) {
-			for (struct buddy_chunk_t *chunk = blk->free_lists[i].head->next; chunk != NULL; chunk = chunk->next) {
-				PDEBUG("->%p", chunk);
-			}
-		}
-		PDEBUG("\n");
-	}
-#endif /* VERBOSE_DEBUG */
-	PDEBUG("----------------------------------------\n\n");
 }

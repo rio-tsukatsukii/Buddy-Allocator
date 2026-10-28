@@ -1,14 +1,20 @@
-.global sys_mmap
+.text
+
+.globl sys_mmap
 .hidden sys_mmap
 
-# C function call:
-#	args -> rdi, rsi, rdx, rcx, r8, r9
-# syscall:
-#	args -> rdi, rsi, rdx, r10, r8, r9
+.type sys_mmap, @function
+
 sys_mmap:
+	.cfi_startproc
+
 	mov $0x9, %rax
 	mov %rcx, %r10
 	syscall
 	ret
+
+	.cfi_endproc
+
+.size sys_mmap, .-sys_mmap
 
 .section .note.GNU-stack,"",@progbits
